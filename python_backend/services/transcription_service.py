@@ -10,7 +10,7 @@ import webrtcvad
 import collections
 import aioredis
 import threading
-
+import os
 from typing import Optional
 from transformers import AutoTokenizer
 from langchain.llms.base import LLM
@@ -29,8 +29,10 @@ logging.basicConfig(
 WHISPER_PROMPT = "<|startoftranscript|><|de|><|transcribe|><|notimestamps|>"
 LANGUAGE_CODE = "de"
 WHISPER_MODEL_NAME = "whisper"
-TRITON_SERVER_URL = "localhost:8001"
-REDIS_HOST = "localhost"
+# TRITON_SERVER_URL = "localhost:8001"
+TRITON_SERVER_URL = os.environ.get("TRITON_SERVER_URL", "triton_latest:8001")
+# REDIS_HOST = "localhost"
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = 6379
 TRANSCRIPTION_CHANNEL = "transcriptions"
 SAMPLE_RATE = 16000  # Hz
@@ -42,6 +44,10 @@ FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2  # 16-bit audio
 
 # REdis init
 redis = aioredis.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}/0")
+
+print(sd.query_devices())
+print(sd.query_devices())
+print(sd.query_devices())
 
 class TritonLLM(LLM):
     llm_url: str = f"http://{TRITON_SERVER_URL}/v2/models/llama3.1/generate"
@@ -96,7 +102,7 @@ class TritonLLM(LLM):
 llm = TritonLLM()
 
 try:
-    tokenizer = AutoTokenizer.from_pretrained("/home/chris/engines/Meta-Llama-3.1-8B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained("/engines/Meta-Llama-3.1-8B-Instruct")
     logging.info("Tokenizer loaded successfully.")
 except Exception as e:
     logging.error(f"Failed to load tokenizer: {e}")
@@ -107,7 +113,7 @@ def transcribe_audio(
     whisper_prompt: str,
     language: str,
     model_name: str = "whisper-large-v3",
-    server_url: str = "localhost:8001"
+    server_url: str = "triton_latest:8001"
 ) -> Optional[str]:
     """
     Sends audio data to the Triton server via gRPC for transcription.

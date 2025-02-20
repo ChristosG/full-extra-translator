@@ -3,11 +3,25 @@ import ReactDOM from 'react-dom/client';
 import './App.css';
 import DetachedContainer from './DetachedContainer';
 import { FaExternalLinkAlt } from 'react-icons/fa';
+import SummariesPanel from './SummariesPanel';
+import SummaryModal from './SummaryModal';
+import { Buffer } from 'buffer';
 
 interface TooltipProps {
   visible: boolean;
   message: string;
   position: React.CSSProperties;
+}
+
+interface SummaryData {
+  speaker_ids: number[];
+  bulletpoints: string;
+}
+
+
+interface TTSData {
+  base64_audio: string;
+  sample_rate: number;
 }
 
 const Tooltip: React.FC<TooltipProps> = ({ visible, message, position }) => {
@@ -62,6 +76,28 @@ function App() {
   const germanRootRef = useRef<ReactDOM.Root | null>(null);
   const englishRootRef = useRef<ReactDOM.Root | null>(null);
 
+  const [isSummaryLoading, setIsSummaryLoading] = useState(false);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [summaryResult, setSummaryResult] = useState("");
+
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [ttsQueue, setTtsQueue] = useState<TTSData[]>([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  const ttsQueueRef = useRef<TTSData[]>([]);
+  const ttsWsRef = useRef<WebSocket | null>(null);
+
+    useEffect(() => {
+      ttsQueueRef.current = ttsQueue;
+    }, [ttsQueue]);
+
+    useEffect(() => {
+      audioCtxRef.current = new AudioContext(); 
+    }, []);
+    
   const toggleTheme = () => {
     setIsDarkMode((prevMode) => !prevMode);
   };
@@ -75,7 +111,116 @@ function App() {
     element.click();
     document.body.removeChild(element);
   };
+  useEffect(() => {
+    if (ttsEnabled) {
+      const ws = new WebSocket("wss://zelime.duckdns.org/ws-tts");
+      ttsWsRef.current = ws;
+  
+      ws.onopen = () => console.log("[WS-TTS] connected");
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.channel === "tts") {
+            const data = msg.data;
+            setTtsQueue(prev => [...prev, {
+              base64_audio: data.base64_audio,
+              sample_rate: data.sample_rate
+            }]);
+          }
+        } catch (err) {
+          console.error("[WS-TTS] parse error:", err);
+        }
+      };
+      ws.onclose = () => console.log("[WS-TTS] disconnected");
+  
+      // Cleanup: close on unmount or if ttsEnabled goes false
+      return () => {
+        console.log("[WS-TTS] cleaning up...");
+        ws.close();
+        ttsWsRef.current = null;
+      };
+    } else {
+      // if !ttsEnabled, ensure WS is closed
+      if (ttsWsRef.current) {
+        ttsWsRef.current.close();
+        ttsWsRef.current = null;
+      }
+      return;
+    }
+  }, [ttsEnabled]);
 
+  // 2) When queue changes, if ttsEnabled & not playing, call playNextChunk
+  useEffect(() => {
+    // If TTS is enabled, and we are not currently playing, and we do have something queued:
+    if (ttsEnabled && !isPlaying && ttsQueue.length > 0) {
+      setIsPlaying(true);
+      processTtsQueue();
+    }
+  }, [ttsEnabled, ttsQueue, isPlaying]);
+  
+  async function processTtsQueue() {
+    // Keep playing until the queue is empty OR TTS is disabled.
+    while (ttsEnabled && ttsQueueRef.current.length > 0) {
+      const nextChunk = ttsQueueRef.current.shift(); // remove first item
+      if (!nextChunk) break;
+      await playBase64Float32(nextChunk.base64_audio, nextChunk.sample_rate);
+    }
+    setIsPlaying(false);
+  }
+  
+
+  async function playBase64Float32(b64String: string, sampleRate: number) {
+    if (!audioCtxRef.current) return;
+  
+    if (audioCtxRef.current.state === "suspended") {
+      await audioCtxRef.current.resume();
+    }
+  
+    const raw = atob(b64String);
+    const buf = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      buf[i] = raw.charCodeAt(i);
+    }
+    const float32arr = new Float32Array(buf.buffer);
+  
+    const audioBuffer = audioCtxRef.current.createBuffer(1, float32arr.length, sampleRate);
+    audioBuffer.copyToChannel(float32arr, 0);
+  
+    return new Promise<void>((resolve) => {
+      const source = audioCtxRef.current!.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioCtxRef.current!.destination);
+  
+      currentSourceRef.current = source;
+      source.onended = () => {
+        currentSourceRef.current = null;
+        resolve();
+      };
+      source.start(0);
+    });
+  }
+
+  function handleToggleTTS() {
+    const newVal = !ttsEnabled;
+    if (newVal) {
+      // user is enabling TTS
+      audioCtxRef.current?.resume().then(() => {
+        setTtsEnabled(true);
+      });
+    } else {
+      // user is disabling TTS
+      setTtsQueue([]);
+      ttsQueueRef.current = [];
+      setIsPlaying(false);
+      if (currentSourceRef.current) {
+        currentSourceRef.current.stop();
+        currentSourceRef.current = null;
+      }
+      setTtsEnabled(false); // triggers the effect to close the WS
+    }
+  }
+  
+  
   const initializeWebSocket = () => {
     // const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     // const wsPort = '7000';
@@ -106,8 +251,7 @@ function App() {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        const channel = message.channel;
-        const data = typeof message.data === 'string' ? JSON.parse(message.data) : message.data;
+        const { channel, data } = message; 
 
         if (channel === 'transcriptions') {
           if (data.transcription) {
@@ -129,7 +273,9 @@ function App() {
               setNewMessagesEnglish(true);
             }
           }
-        } else if (channel === 'better_translations') {
+        }
+
+         else if (channel === 'better_translations') {
           if (data.translation) {
             const betterText = data.translation;
 
@@ -283,6 +429,31 @@ function App() {
   // Active tab state for mobile
   const [activeTab, setActiveTab] = useState<'german' | 'english'>('german');
 
+  async function handleSummarize() {
+    try {
+      setIsSummaryLoading(true);
+      setShowSummaryModal(true);
+      setSummaryResult(""); // Clear old summary if any
+  
+      const textToSummarize = englishMessages.join("\n"); 
+      // or whichever text array you want
+  
+      const response = await fetch("https://zelime.duckdns.org/summaries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: textToSummarize })
+      });
+      const data = await response.json();
+  
+      setSummaryResult(data.summary || "No summary returned.");
+    } catch (err) {
+      console.error("Summary request failed:", err);
+      setSummaryResult("Error producing summary.");
+    } finally {
+      setIsSummaryLoading(false);
+    }
+  }
+
   // detach transcription windows
   const detachWindow = (
     language: 'german' | 'english',
@@ -386,7 +557,8 @@ function App() {
       <header className={`header ${isDarkMode ? 'dark-header' : 'light-header'}`}>
         <div className="header-title-container">
           <h1 className={`header-title ${isDarkMode ? 'dark-text-title' : 'light-text-title'}`}>
-            Transcribe & Translate
+            test spec
+            
           </h1>
           <div
             className="connection-container"
@@ -402,7 +574,40 @@ function App() {
               position={{ top: '30px', left: '10px' }}
             />
           </div>
+          
         </div>
+        <button
+            style={{
+              marginRight: '15px',
+              backgroundColor: isDarkMode ? '#333' : '#f0f4f7',
+              color: isDarkMode ? '#fff' : '#333',
+              border: '1px solid #888',
+              padding: '6px 12px',
+              borderRadius: '5px',
+              cursor: 'pointer'
+            }}
+            onClick={handleSummarize}
+          >
+            Summarize
+          </button>
+
+          <div>
+            <div>
+     
+
+              <label>
+                <input 
+                  type="checkbox"
+                  checked={ttsEnabled}
+                  onChange={handleToggleTTS}
+                />
+                Enable TTS
+              </label>
+
+
+     
+    </div>
+</div>
 
         <div className="theme-toggle">
           {!isMobile && (
@@ -456,6 +661,16 @@ function App() {
       )}
 
       <main className="main-content">
+      <SummaryModal
+        isVisible={showSummaryModal}
+        isDarkMode={isDarkMode}
+        summary={summaryResult}
+        isLoading={isSummaryLoading}
+        onClose={() => {
+          setShowSummaryModal(false);
+          setSummaryResult("");
+        }}
+      />
         {(!isMobile || activeTab === 'german') && (
           <section className={`section ${isDarkMode ? 'dark-section' : 'light-section'}`}>
             <div className="section-header">
@@ -549,7 +764,7 @@ function App() {
                   <label className="switch">
                     <input
                       type="checkbox"
-                      checked={useBetterTranslation}
+                      checked={!useBetterTranslation}
                       onChange={() => setUseBetterTranslation(!useBetterTranslation)}
                     />
                     <span className="slider round"></span>

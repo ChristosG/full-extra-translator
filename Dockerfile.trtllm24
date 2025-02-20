@@ -1,0 +1,22 @@
+FROM nvcr.io/nvidia/tritonserver:24.10-trtllm-python-py3
+
+RUN apt-get update && apt-get -y install python3.10 python3-pip git git-lfs 
+
+RUN apt-get update && apt-get install -y --no-install-recommends rapidjson-dev python-is-python3 ccache 
+
+RUN pip3 uninstall -y tensorrt tensorrt-cu12 tensorrt-cu12-bindings tensorrt-cu12-libs tensorrt-llm torch 
+
+RUN pip3 install tensorrt_llm -U --pre --extra-index-url https://pypi.nvidia.com
+
+#RUN pip3 install tiktoken
+
+RUN pip install -U transformers
+
+RUN git clone https://github.com/NVIDIA/TensorRT-LLM.git
+#WORKDIR /opt/tritonserver/TensorRT-LLM
+
+EXPOSE 5991
+EXPOSE 5992
+EXPOSE 5993
+
+CMD ["/bin/bash"]

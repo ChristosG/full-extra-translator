@@ -13,7 +13,7 @@ from langchain.callbacks.manager import CallbackManagerForLLMRun
 import requests
 import tritonclient.grpc as grpcclient
 from tritonclient.utils import np_to_triton_dtype
-
+import os
 logging.basicConfig(
     level=logging.INFO,  
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -21,8 +21,11 @@ logging.basicConfig(
 )
 
 LLAMA_MODEL_NAME = "ensemble"
-TRITON_SERVER_URL = "localhost:8000"
-REDIS_HOST = "localhost"
+# TRITON_SERVER_URL = "localhost:8000"
+TRITON_SERVER_URL= 'triton_latest:8000'
+# REDIS_HOST = "localhost"
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+
 REDIS_PORT = 6379
 TRANSLATION_CHANNEL = "translations"
 TRANSCRIPTION_CHANNEL = "transcriptions"
@@ -82,7 +85,7 @@ class TritonLLM(LLM):
 llm = TritonLLM()
 
 try:
-    tokenizer = AutoTokenizer.from_pretrained("/home/chris/engines/Meta-Llama-3.1-8B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained("/engines/Meta-Llama-3.1-8B-Instruct")
     logging.info("Tokenizer loaded successfully.")
 except Exception as e:
     logging.error(f"Failed to load tokenizer: {e}")

@@ -1,0 +1,18 @@
+
+# Dockerfile.yarn
+FROM node:18-alpine
+
+# Set working directory inside container
+WORKDIR /app
+
+# Copy all files from current directory into /app
+COPY . /app
+
+# Install dependencies via yarn
+RUN yarn install
+
+# Expose the port (assuming your React app runs on 3000)
+EXPOSE 3000
+
+# Start the React app
+CMD ["yarn", "start"]

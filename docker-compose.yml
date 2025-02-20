@@ -1,0 +1,239 @@
+version: "3.9"
+
+services:
+  triton_latest:
+    build:
+      context: .
+      dockerfile: Dockerfile.triton_latest 
+    container_name: lw_latest
+    command: >
+      tritonserver --model-repository=/trtback/all_models/inflight8x7/ 
+      --model-control-mode=explicit 
+      --load-model=whisper 
+      --load-model=ensemble 
+      --load-model=preprocessing 
+      --load-model=postprocessing 
+      --load-model=tensorrt_llm 
+      --log-verbose=2 
+      --log-info=1 
+      --log-warning=1 
+      --log-error=1 
+      --http-port=8000 
+      --grpc-port=8001 
+      --metrics-port=8002
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      - /mnt/nvme512/engines:/engines
+      - /home/chris/latest_trt_backend/tensorrtllm_backend:/trtback
+      - /home/chris/latest_trt_backend/reqs/:/pipMeUp
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: 1
+    runtime: nvidia
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+    security_opt:
+      - label=disable
+      - seccomp=unconfined
+    tmpfs:
+      - /tmp:exec
+    user: root
+    ipc: host
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    
+  trtllm24:
+    build:
+      context: .
+      dockerfile: Dockerfile.trtllm24 
+    container_name: trtllm2410_withtrt
+    command: >
+      tritonserver --model-repository=/trtback/all_models/full_context_llama/ 
+      --model-control-mode=explicit 
+      --load-model=tensorrt_llm_bls 
+      --load-model=preprocessing 
+      --load-model=postprocessing 
+      --load-model=tensorrt_llm 
+      --load-model=ensemble 
+      --log-verbose=2 
+      --log-info=1 
+      --log-warning=1 
+      --log-error=1 
+      --http-port=5991 
+      --grpc-port=5992 
+      --metrics-port=5993
+    ports:
+      - "5991:5991"
+      - "5992:5992"
+      - "5993:5993"
+    volumes:
+      - /mnt/nvme512/engines:/engines
+      - /home/chris/trtllm24_10/tensorrtllm_backend:/trtback
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: 0
+    runtime: nvidia
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+    security_opt:
+      - label=disable
+      - seccomp=unconfined
+    tmpfs:
+      - /tmp:exec
+    user: root
+    ipc: host
+
+  redis:
+    image: redis:6-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  backend_api:
+    build:
+      context: ./python_backend
+      dockerfile: ../Dockerfile.backend
+    container_name: fastapi_backend
+    command: uvicorn new_fast_api:app --host 0.0.0.0 --port 7000
+    ports:
+      - "7000:7000"
+    volumes:
+      - ./python_backend:/app
+      - /mnt/nvme512/engines:/engines
+      - /run/user/1000/pulse/native:/run/pulse/native
+    depends_on:
+       triton_latest:
+         condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - PULSE_SERVER=unix:/run/pulse/native
+      - TRITON_SERVER_URL_4060=trtllm24:5991
+      - PA_ALSA_PLUGHW=1
+    privileged: true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    user: "1000:1000"
+    group_add:
+      - audio
+      
+  transcription_service:
+    build:
+      context: ./python_backend/services
+      dockerfile: ../../Dockerfile.backend
+    container_name: transcription_service
+    command: python spec_3.py
+    volumes:
+      - ./python_backend/services:/app
+      - /mnt/nvme512/engines:/engines
+      - /run/user/1000/pulse/native:/run/pulse/native
+    depends_on:
+       triton_latest:
+         condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - PULSE_SERVER=unix:/run/pulse/native
+      - TRITON_SERVER_URL=triton_latest:8001
+      - PA_ALSA_PLUGHW=1
+    privileged: true
+    devices:
+      - "/dev/snd:/dev/snd"
+    user: "1000:1000"
+    group_add:
+      - audio
+      
+  translation_service:
+    build:
+      context: ./python_backend/services
+      dockerfile: ../../Dockerfile.backend
+    container_name: translation_service
+    command: python translation_service.py
+    volumes:
+      - ./python_backend/services:/app
+      - /mnt/nvme512/engines:/engines
+      - /run/user/1000/pulse/native:/run/pulse/native
+    depends_on:
+       triton_latest:
+         condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - PULSE_SERVER=unix:/run/pulse/native
+      - TRITON_SERVER_URL=triton_latest:8000
+      - TRITON_SERVER_URL_4060=trtllm24:5991
+    privileged: true
+    devices:
+      - "/dev/snd:/dev/snd"
+    user: "1000:1000"
+    group_add:
+      - audio
+      
+  better_translation_service:
+    build:
+      context: ./python_backend/services
+      dockerfile: ../../Dockerfile.backend
+    container_name: better_translation_service
+    command: python enha_5.py
+    volumes:
+      - ./python_backend/services:/app
+      - /mnt/nvme512/engines:/engines
+      - /run/user/1000/pulse/native:/run/pulse/native
+    depends_on:
+       triton_latest:
+         condition: service_healthy
+    environment:
+      - REDIS_HOST=redis  
+      - PULSE_SERVER=unix:/run/pulse/native
+      - TRITON_SERVER_URL=triton_latest:8001
+      - TRITON_SERVER_URL_4060=trtllm24:5991
+      - PA_ALSA_PLUGHW=1
+    privileged: true
+    devices:
+      - "/dev/snd:/dev/snd"
+    user: "1000:1000"
+    group_add:
+      - audio
+      
+  tts_service:
+    build:
+      context: ./python_backend/services
+      dockerfile: ../../Dockerfile.backend
+    container_name: tts_service
+    command: python tts_service.py
+    volumes:
+      - ./python_backend/services:/app
+      - /run/user/1000/pulse/native:/run/pulse/native
+    depends_on:
+       triton_latest:
+         condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - PULSE_SERVER=unix:/run/pulse/native
+      - PA_ALSA_PLUGHW=1
+    privileged: true
+    devices:
+      - "/dev/snd:/dev/snd"
+    user: "1000:1000"
+    group_add:
+      - audio
+      
+  yarn_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.yarn
+    container_name: yarn_app
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+

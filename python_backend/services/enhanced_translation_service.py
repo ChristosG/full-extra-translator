@@ -77,7 +77,7 @@ class TritonLLM(LLM):
 llm = TritonLLM()
 
 try:
-    tokenizer = AutoTokenizer.from_pretrained("/home/chris/engines/Meta-Llama-3.1-8B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained("/mnt/nvme512/engines/Meta-Llama-3.1-8B-Instruct")
     logging.info("Tokenizer loaded successfully.")
 except Exception as e:
     logging.error(f"Failed to load tokenizer: {e}")
